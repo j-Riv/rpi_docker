@@ -1,0 +1,175 @@
+version: "3.7"
+
+services:
+  # Traefik - Reverse Proxy
+  traefik:
+    image: "traefik:v2.2"
+    container_name: "traefik"
+    command:
+      - "--providers.docker=true"
+      - "--log.level=DEBUG"
+      - "--log.filePath=/logs/traefik.log"
+      - "--accessLog.filePath=/logs/access.log"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "53:53/udp"
+      - "53:53/tcp"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./traefik-v2/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./traefik-v2/acme.json:/acme.json"
+      - "./traefik-v2/logs:/logs" #make sure to touch log files before starting container
+    networks:
+      - traefik_proxy
+    labels:
+      # Dashboard
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls.certresolver=le"
+      - "traefik.http.routers.traefik.entrypoints=secure"
+      # global redirect to https
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=insecure"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      # middleware redirect
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.traefik.middlewares=traefik-forward-auth"
+
+    ## OAuth - Forward Authentication
+  oauth:
+    image: thomseddon/traefik-forward-auth:2.1-arm64
+    container_name: oauth
+    hostname: oauth
+    restart: always
+    networks:
+      - traefik_proxy
+      - default
+    environment:
+      - PROVIDERS_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - PROVIDERS_GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - SECRET=${OAUTH_SECRET}
+      - INSECURE_COOKIE=false # Example assumes no https, do not use in production
+      - COOKIE_DOMAIN=${DOMAIN_NAME}
+      - WHITELIST=${EMAIL_WHITELIST}
+      - LOG_LEVEL=debug
+      - LIFETIME=2592000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-forward-auth.rule=Host(`oauth.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.traefik-forward-auth.entrypoints=secure"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.address=http://oauth:4181"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+      - "traefik.http.services.traefik-forward-auth.loadbalancer.server.port=4181"
+    networks:
+      - traefik_proxy
+
+  # NetData
+  netdata:
+    image: netdata/netdata
+    container_name: netdata
+    hostname: netdata
+    restart: always
+    networks:
+      - traefik_proxy
+    ports:
+      - 19999:19999
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /usr/local/bin/docker:/usr/bin/docker
+    environment:
+      - PGID=${DOCKER_PID}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.netdata.rule=Host(`netdata.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.netdata.middlewares=traefik-forward-auth"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.address=http://oauth:4181"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+      - "traefik.http.routers.netdata.entrypoints=secure"
+      - "traefik.http.routers.netdata.tls=true"
+      - "traefik.http.routers.netdata.tls.certresolver=le"
+
+  # Web App
+  nodejs:
+    image: nodejs-image-placeholder:latest
+    build:
+        context: ./app
+        dockerfile: ./app/Dockerfile
+    container_name: nodejs
+    restart: unless-stopped
+    ports:
+    - 3000:3000
+    volumes:
+      - ./app:/home/node/app
+      - ./app/node_modules:/home/node/app/node_modules
+    networks:
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nodejs.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.nodejs.entrypoints=secure"
+      - "traefik.http.routers.nodejs.tls=true"
+      - "traefik.http.routers.nodejs.tls.certresolver=le"
+
+  # PiHole
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    hostname: pihole
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+    ports:
+      - "5353:53/tcp"
+      - "5453:53/udp"
+      # - "67:67/udp"
+      - "8182:80/tcp"
+      - "8183:443/tcp"
+    # Recommended but not required (DHCP needs NET_ADMIN)
+    #   https://github.com/pi-hole/docker-pi-hole#note-on-capabilities
+    cap_add:
+      - NET_ADMIN
+    # dns:
+    #   - 127.0.0.1
+    # Volumes store your data between container upgrades
+    volumes:
+      - ./pihole/etc-pihole/:/etc/pihole/
+      - ./pihole/etc-dnsmasq.d/:/etc/dnsmasq.d/
+      - ./pihole/logs/pihole.log:/var/log/pihole.log
+    environment:
+      TZ: "America/Los_Angeles"
+      WEBPASSWORD: ${PIHOLE_WEBPASSWORD}
+      VIRTUAL_PORT: 80
+      ServerIP: ${SERVER_IP}
+      DNS1: 127.0.0.1
+      DNS2: 8.8.8.8
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pihole.rule=Host(`pihole.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.pihole.middlewares=traefik-forward-auth"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.address=http://oauth:4181"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+      - "traefik.http.routers.pihole.entrypoints=secure"
+      - "traefik.http.routers.pihole.tls=true"
+      - "traefik.http.routers.pihole.tls.certresolver=le"
+      - "traefik.http.services.pihole.loadbalancer.server.port=80"
+      - "traefik.tcp.services.pihole.loadbalancer.server.port=53"
+      - "traefik.udp.routers.dns-udp.entrypoints=dns-udp"
+      - "traefik.udp.routers.dns-udp.service=pihole"
+      - "traefik.udp.services.pihole.loadbalancer.server.port=53"
+    expose:
+      - 80
+
+networks:
+  traefik_proxy:
+    external:
+      name: traefik_proxy
+  default:
+    driver: bridge

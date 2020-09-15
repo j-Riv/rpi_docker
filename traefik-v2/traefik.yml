@@ -1,0 +1,58 @@
+#Traefik.yml
+api:
+  dashboard: true
+
+#Define HTTP and HTTPS entrypoints
+entryPoints:
+  insecure:
+    address: ":80"
+  secure:
+    address: ":443"
+  dns-ep:
+    address: ":53/tcp"
+  dns-udp:
+    address: ":53/udp"
+
+#Dynamic configuration will come from docker labels
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    network: "traefik_proxy"
+    exposedByDefault: false 
+
+http:
+  middlewares:
+    traefik=forward-auth:
+      forwardauth:
+        - address = "http://oauth:4181"
+        - trustForwardedHeader = true
+        - authResponseHeaders = ["X-Forwarded-User"]
+    testHeader:
+      headers:
+        customResponseHeaders:
+          - X-Custom-Response-Header= ["X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex"}
+
+#Enable acme with http file challenge
+certificatesResolvers:
+  le:
+    acme:
+      email: name@example.com # set email
+      storage: /acme.json
+      httpChallenge:
+        # used during the challenge
+        entryPoint: insecure
+
+# Limiting the Logs to Specific Fields
+accessLog:
+  filePath: "/logs/access.log"
+  format: json
+  fields:
+    defaultMode: keep
+    names:
+      ClientUsername: keep
+    headers:
+      defaultMode: keep
+      names:
+          User-Agent: keep
+          Authorization: drop
+          Content-Type: keep

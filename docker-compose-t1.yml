@@ -1,0 +1,231 @@
+version: '3'
+
+services:
+  ## Traefik - Reverse Proxy
+  traefik:
+    image: traefik:v1.7.16
+    command: --configFile=/traefik.toml
+    container_name: traefik
+    hostname: traefik
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+      - default
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8145:8080"
+    domainname: ${DOMAIN_NAME}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik-v1/traefik.toml:/traefik.toml
+      - ./traefik-v1/acme.json:/acme.json
+    labels:
+      traefik.enable: "true"
+      traefik.backend: traefik
+      traefik.protocol: http
+      traefik.port: 8080
+      traefik.frontend.rule: Host:traefik.${DOMAIN_NAME}
+      traefik.frontend.headers.SSLHost: traefik.${DOMAIN_NAME}
+      traefik.docker.network: traefik_proxy
+      traefik.frontend.passHostHeader: "true"
+      traefik.frontend.headers.SSLForceHost: "true"
+      traefik.frontend.headers.SSLRedirect: "true"
+      traefik.frontend.headers.browserXSSFilter: "true"
+      traefik.frontend.headers.contentTypeNosniff: "true"
+      traefik.frontend.headers.forceSTSHeader: "true"
+      traefik.frontend.headers.STSSeconds: 315360000
+      traefik.frontend.headers.STSIncludeSubdomains: "true"
+      traefik.frontend.headers.STSPreload: "true"
+      traefik.frontend.headers.customResponseHeaders: X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex
+      traefik.frontend.headers.frameDeny: "true"
+      traefik.frontend.headers.customFrameOptionsValue: 'allow-from https://${DOMAIN_NAME}'
+#      traefik.frontend.auth.basic.users: '${HTTP_USERNAME}:${HTTP_PASSWORD}'
+      traefik.frontend.auth.forward.address: "http://oauth:4181"
+      traefik.frontend.auth.forward.authResponseHeaders: X-Forwarded-User
+      traefik.frontend.auth.forward.trustForwardHeader: "true"
+
+  netdata:
+    image: netdata/netdata
+    container_name: netdata
+    hostname: netdata
+    restart: always
+    networks:
+      - traefik_proxy
+      - default
+    ports:
+      - 19999:19999
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /usr/local/bin/docker:/usr/bin/docker
+    environment:
+      - PGID=999
+    labels:
+      traefik.enable: "true"
+      traefik.backend: netdata
+      traefik.protocol: http
+      traefik.port: 19999
+      traefik.frontend.rule: Host:netdata.${DOMAIN_NAME}
+      traefik.frontend.headers.SSLHost: netdata.${DOMAIN_NAME}
+      traefik.docker.network: traefik_proxy
+      traefik.frontend.passHostHeader: "true"
+      traefik.frontend.headers.SSLForceHost: "true"
+      traefik.frontend.headers.SSLRedirect: "true"
+      traefik.frontend.headers.browserXSSFilter: "true"
+      traefik.frontend.headers.contentTypeNosniff: "true"
+      traefik.frontend.headers.forceSTSHeader: "true"
+      traefik.frontend.headers.STSSeconds: 315360000
+      traefik.frontend.headers.STSIncludeSubdomains: "true"
+      traefik.frontend.headers.STSPreload: "true"
+      traefik.frontend.headers.customResponseHeaders: X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex
+      traefik.frontend.headers.frameDeny: "true"
+      traefik.frontend.headers.customFrameOptionsValue: 'allow-from https://${DOMAIN_NAME}'
+      traefik.frontend.auth.forward.address: "http://oauth:4181"
+      traefik.frontend.auth.forward.authResponseHeaders: X-Forwarded-User
+      traefik.frontend.auth.forward.trustForwardHeader: "true"
+
+  ## node app
+  nodejs:
+    build:
+      context: ./app
+      dockerfile: ./app/Dockerfile
+    image: nodejs-image-placeholder:latest
+    container_name: nodejs
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    volumes:
+      - ./app:/home/node/app
+      - ./app/node_modules:/home/node/app/node_modules
+    networks:
+      - traefik_proxy
+      - default
+    command: node server.js
+    labels:
+      traefik.enable: "true"
+      traefik.backend: nodejs
+      traefik.protocol: http
+      traefik.port: 3000
+      traefik.frontend.rule: Host:${DOMAIN_NAME}
+      traefik.frontend.headers.SSLHost: ${DOMAIN_NAME}
+      traefik.docker.network: traefik_proxy
+      traefik.frontend.passHostHeader: "true"
+      traefik.frontend.headers.SSLForceHost: "true"
+      traefik.frontend.headers.SSLRedirect: "true"
+      traefik.frontend.headers.browserXSSFilter: "true"
+      traefik.frontend.headers.contentTypeNosniff: "true"
+      traefik.frontend.headers.forceSTSHeader: "true"
+      traefik.frontend.headers.STSSeconds: 315360000
+      traefik.frontend.headers.STSIncludeSubdomains: "true"
+      traefik.frontend.headers.STSPreload: "true"
+      traefik.frontend.headers.customResponseHeaders: X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex
+      traefik.frontend.headers.frameDeny: "true"
+    expose:
+      - 3000
+
+  ## OAuth - Forward Authentication
+  oauth:
+    image: thomseddon/traefik-forward-auth:2.1-arm64
+    container_name: oauth
+    hostname: oauth
+    restart: always
+    networks:
+      - traefik_proxy
+      - default
+    environment:
+      PROVIDERS_GOOGLE_CLIENT_ID: 157509502755-4ocrja5a5a41r1r474okmsek8arml7aj.apps.googleusercontent.com
+      PROVIDERS_GOOGLE_CLIENT_SECRET: iS1uGvzVgBLoK7uo5tgj4uhD
+      SECRET: d6aee5c3199cace3c3a1ca7e68d7057e
+      COOKIE_DOMAIN: ${DOMAIN_NAME}
+      INSECURE_COOKIE: "false"
+      AUTH_HOST: oauth.${DOMAIN_NAME}
+      URL_PATH: /_oauth
+      WHITELIST: "jose.alfredo.rivera@gmail.com,kuervo11@gmail.com"
+      LOG_LEVEL: info
+      LIFETIME: 2592000 # 30 days
+    labels:
+      traefik.enable: "true"
+      traefik.backend: oauth
+      traefik.port: 4181
+      traefik.frontend.rule: Host:oauth.${DOMAIN_NAME}
+      traefik.frontend.headers.SSLHost: oauth.${DOMAIN_NAME}
+      traefik.docker.network: traefik_proxy
+      traefik.frontend.passHostHeader: "true"
+      traefik.frontend.headers.SSLForceHost: "true"
+      traefik.frontend.headers.customResponseHeaders: X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex
+      traefik.frontend.headers.SSLRedirect: "true"
+      traefik.frontend.headers.browserXSSFilter: "true"
+      traefik.frontend.headers.contentTypeNosniff: "true"
+      traefik.frontend.headers.forceSTSHeader: "true"
+      traefik.frontend.headers.STSSeconds: 315360000
+      traefik.frontend.headers.STSIncludeSubdomains: "true"
+      traefik.frontend.headers.STSPreload: "true"
+      traefik.frontend.headers.frameDeny: "true"
+      traefik.frontend.auth.forward.address: "http://oauth:4181"
+      traefik.frontend.auth.forward.authResponseHeaders: X-Forwarded-User
+      traefik.frontend.auth.forward.trustForwardHeader: "true"
+
+  ## PiHole
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    hostname: pihole
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      # - "67:67/udp"
+      - "8182:80/tcp"
+      - "8183:443/tcp"
+    networks:
+      - traefik_proxy
+      - default
+    environment:
+      TZ: 'America/Los_Angeles'
+      WEBPASSWORD: 'm9SSEU2%*A@JgxKX'
+    # Volumes store your data between container upgrades
+    volumes:
+      - './pihole/etc-pihole/:/etc/pihole/'
+      - './pihole/etc-dnsmasq.d/:/etc/dnsmasq.d/'
+    # Recommended but not required (DHCP needs NET_ADMIN)
+    #   https://github.com/pi-hole/docker-pi-hole#note-on-capabilities
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    labels:
+      traefik.enable: "true"
+      traefik.backend: pihole
+      traefik.protocol: http
+      traefik.port: 80
+      traefik.frontend.rule: Host:pihole.${DOMAIN_NAME}
+      traefik.frontend.headers.SSLHost: pihole.${DOMAIN_NAME}
+      traefik.docker.network: traefik_proxy
+      traefik.frontend.passHostHeader: "true"
+      traefik.frontend.headers.SSLForceHost: "true"
+      traefik.frontend.headers.SSLRedirect: "true"
+      traefik.frontend.headers.browserXSSFilter: "true"
+      traefik.frontend.headers.contentTypeNosniff: "true"
+      traefik.frontend.headers.forceSTSHeader: "true"
+      traefik.frontend.headers.STSSeconds: 315360000
+      traefik.frontend.headers.STSIncludeSubdomains: "true"
+      traefik.frontend.headers.STSPreload: "true"
+      traefik.frontend.headers.customResponseHeaders: X-Robots-Tag:noindex,nofollow,nosnippet,noarchive,notranslate,noimageindex
+      traefik.frontend.headers.frameDeny: "true"
+      traefik.frontend.headers.customFrameOptionsValue: 'allow-from https://${DOMAIN_NAME}'
+      traefik.frontend.auth.forward.address: "http://oauth:4181"
+      traefik.frontend.auth.forward.authResponseHeaders: X-Forwarded-User
+      traefik.frontend.auth.forward.trustForwardHeader: "true"
+    expose: 
+      - 80
+
+networks:
+  traefik_proxy:
+    external:
+      name: traefik_proxy
+  default:
+    driver: bridge

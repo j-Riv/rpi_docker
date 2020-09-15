@@ -1,0 +1,39 @@
+#debug = true
+
+# Change this if needed
+defaultEntryPoints = ["https","http"]
+
+[entryPoints]
+  [entryPoints.http]
+    address = ":80"
+    [entryPoints.http.redirect]
+    entryPoint = "https"
+  [entryPoints.https]
+    address = ":443"
+  [entryPoints.https.tls]
+
+[retry]
+
+[api]
+  entryPoint = "traefik"
+  dashboard = true
+  address = ":8080"
+
+[docker]
+endpoint = "unix:///var/run/docker.sock"
+domain = "example.com" # set domain
+watch = true
+# I prefer to expose my containers explicitly
+exposedbydefault = false
+
+[acme]
+email = "email@example.com" # set email
+storage = "acme.json"
+entryPoint = "https"
+OnHostRule = true
+onDemand = false
+[acme.httpChallenge]
+entryPoint = "http"
+[[acme.domains]]
+  main = "example.com"
+  sans = ["oauth.example.com", "traefik.example.com", "netdata.example.com", "pihole.example.com"]
